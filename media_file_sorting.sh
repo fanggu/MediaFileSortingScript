@@ -1,213 +1,494 @@
 #!/bin/bash
 
-# Initialization of variables
+# =========================================
+#Photo and Video Sorting Script
+# =========================================
+
+# Script Version: 1.0
+
+# -----------------------------------------
+# Usage:
+# ./script.sh [options] /path/to/source/photos
+#
+# Options:
+#   --dryrun           Simulate actions without making changes
+#   --force            Restore files before sorting again
+#   --restore          Restore files to original locations
+#   --help             Display help message
+#   --extensions       Specify additional file extensions to include
+#   --exclude-dirs     Exclude specified directories from processing
+#   --no-prompt        Do not prompt for confirmations
+# -----------------------------------------
+
+# =========================================
+# Initialization of Variables
+# =========================================
+
 DRYRUN=false
 FORCE=false
+RESTORE=false
+HELP=false
+NO_PROMPT=false
+EXTRA_EXTENSIONS=()
+EXCLUDE_DIRS=()
+SOURCE_DIR=""
+TARGET_DIR=""
 LOG_FILE=""
 SORTED_FLAG=""
-FORCE_RESORT_TEMP_FOLDER=""
+LOCK_FILE=""
+PROCESSED_FILES=()
+CREATED_DIRS=()
+SUPPORTED_EXTENSIONS=(jpg jpeg png cr2 cr3 nef arw rw2 orf raf dng mov mp4 avi mkv wmv flv mpeg mpg)
 
-# Parse command line arguments
+# =========================================
+# Function to Display Help Message
+# =========================================
+
+display_help() {
+    echo "Usage: $0 [options] /path/to/source/photos"
+    echo
+    echo "Options:"
+    echo "  --dryrun           Simulate actions without making changes"
+    echo "  --force            Restore files before sorting again"
+    echo "  --restore          Restore files to original locations"
+    echo "  --help             Display this help message"
+    echo "  --extensions ext1,ext2  Specify additional file extensions to include"
+    echo "  --exclude-dirs dir1,dir2  Exclude specified directories from processing"
+    echo "  --no-prompt        Do not prompt for confirmations"
+    exit 0
+}
+
+# =========================================
+# Parse Command-Line Arguments
+# =========================================
+
 while [[ "$1" =~ ^- ]]; do
-  case "$1" in
-    -dryrun|--dryrun)
-      DRYRUN=true
-      ;;
-    -force|--force)
-      FORCE=true
-      ;;
-  esac
-  shift
+    case "$1" in
+        --dryrun)
+            DRYRUN=true
+            ;;
+        --force)
+            FORCE=true
+            ;;
+        --restore)
+            RESTORE=true
+            ;;
+        --help)
+            display_help
+            ;;
+        --no-prompt)
+            NO_PROMPT=true
+            ;;
+        --extensions)
+            shift
+            IFS=',' read -ra EXTRA_EXTENSIONS <<< "$1"
+            ;;
+        --exclude-dirs)
+            shift
+            IFS=',' read -ra EXCLUDE_DIRS <<< "$1"
+            ;;
+        *)
+            echo "Unknown option: $1"
+            display_help
+            ;;
+    esac
+    shift
 done
 
-# Get the source directory
+# =========================================
+# Get the Source Directory
+# =========================================
+
 SOURCE_DIR="$1"
 
-# Check if the source directory is provided
 if [ -z "$SOURCE_DIR" ]; then
-  echo "Usage: $0 [-dryrun|--dryrun] [-force|--force] /path/to/source/photos"
-  exit 1
+    echo "Error: Source directory not specified."
+    display_help
 fi
 
-# Set target directory and flag paths
-TARGET_DIR="$SOURCE_DIR/sorted_output"
-LOG_FILE="$TARGET_DIR/sorted_files.log"
-SORTED_FLAG="$TARGET_DIR/.sorted_done"
-FORCE_RESORT_TEMP_FOLDER="$SOURCE_DIR/force_resort_temp"
+if [ ! -d "$SOURCE_DIR" ]; then
+    echo "Error: Source directory does not exist."
+    exit 1
+fi
 
-# If --force is present, rename sorted_output to force_resort_temp and continue
-if [ "$FORCE" = true ]; then
-  if [ -d "$TARGET_DIR" ]; then
-    if [ "$DRYRUN" = true ]; then
-      echo "[DRYRUN] Would rename $TARGET_DIR to $FORCE_RESORT_TEMP_FOLDER"
+# Convert SOURCE_DIR to absolute path
+SOURCE_DIR="$(cd "$SOURCE_DIR"; pwd)"
+
+# =========================================
+# Set Target Directory and Paths
+# =========================================
+
+TARGET_DIR="$SOURCE_DIR/sorted_output"
+LOG_FILE="$SOURCE_DIR/sorted_files.log"
+SORTED_FLAG="$SOURCE_DIR/.sorted_done"
+LOCK_FILE="$SOURCE_DIR/.sorting_lock"
+
+# =========================================
+# Function to Acquire Lock
+# =========================================
+
+acquire_lock() {
+    if [ -e "$LOCK_FILE" ]; then
+        echo "Another instance of the script is running. Exiting."
+        exit 1
     else
-      mv "$TARGET_DIR" "$FORCE_RESORT_TEMP_FOLDER"
-      echo "Renamed $TARGET_DIR to $FORCE_RESORT_TEMP_FOLDER for forced resort."
+        touch "$LOCK_FILE"
     fi
-  fi
-else
-  # If --force is not present, check if sorting has already been done
-  if [ -f "$SORTED_FLAG" ]; then
+}
+
+# =========================================
+# Function to Release Lock
+# =========================================
+
+release_lock() {
+    rm -f "$LOCK_FILE"
+}
+
+# Trap to ensure the lock is released on exit
+trap release_lock EXIT
+
+# Acquire lock
+acquire_lock
+
+# =========================================
+# Function to Confirm Action
+# =========================================
+
+confirm_action() {
+    if [ "$NO_PROMPT" = true ]; then
+        return 0
+    fi
+    read -p "$1 [y/N]: " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+# =========================================
+# Function to Restore Files
+# =========================================
+
+restore_files() {
+    if [ ! -f "$LOG_FILE" ]; then
+        echo "No log file found to restore from."
+        return
+    fi
+
+    if [ "$DRYRUN" = false ] && [ "$NO_PROMPT" = false ]; then
+        if ! confirm_action "Are you sure you want to restore files?"; then
+            echo "Restore aborted by user."
+            exit 1
+        fi
+    fi
+
+    while IFS= read -r line; do
+        source_path="$(echo "$line" | awk -F' -> ' '{print $1}')"
+        target_path="$(echo "$line" | awk -F' -> ' '{print $2}')"
+
+        target_full_path="$SOURCE_DIR/$target_path"
+        dest_full_path="$SOURCE_DIR/$source_path"
+
+        if [ ! -f "$target_full_path" ]; then
+            echo "File not found: $target_full_path. Skipping."
+            continue
+        fi
+
+        # Ensure destination directory exists
+        dest_dir="$(dirname "$dest_full_path")"
+        if [ ! -d "$dest_dir" ]; then
+            if [ "$DRYRUN" = true ]; then
+                echo "[DRYRUN] Would create directory: $dest_dir"
+            else
+                mkdir -p "$dest_dir"
+                echo "Created directory: $dest_dir"
+            fi
+        fi
+
+        # Handle file conflicts
+        if [ -f "$dest_full_path" ]; then
+            base_name="$(basename "$dest_full_path")"
+            dest_dir="$(dirname "$dest_full_path")"
+            extension="${base_name##*.}"
+            filename="${base_name%.*}"
+            counter=1
+            while [ -f "$dest_dir/${filename}_restore_$counter.$extension" ]; do
+                ((counter++))
+            done
+            dest_full_path="$dest_dir/${filename}_restore_$counter.$extension"
+        fi
+
+        if [ "$DRYRUN" = true ]; then
+            echo "[DRYRUN] Would move file: $target_full_path back to $dest_full_path"
+        else
+            mv "$target_full_path" "$dest_full_path"
+            echo "Moved $target_full_path back to $dest_full_path"
+        fi
+    done < "$LOG_FILE"
+
+    # Remove sorted_output directory and sorted flag
+    if [ "$DRYRUN" = true ]; then
+        echo "[DRYRUN] Would remove directory: $TARGET_DIR"
+        echo "[DRYRUN] Would remove flag file: $SORTED_FLAG"
+        echo "[DRYRUN] Would remove log file: $LOG_FILE"
+    else
+        rm -rf "$TARGET_DIR"
+        rm -f "$SORTED_FLAG" "$LOG_FILE"
+        echo "Removed sorted directory, flag file, and log file."
+    fi
+
+    echo "Restore complete."
+}
+
+# =========================================
+# If --restore is Present, Restore Files
+# =========================================
+
+if [ "$RESTORE" = true ]; then
+    restore_files
+    exit 0
+fi
+
+# =========================================
+# If --force is Present, Restore Before Sorting
+# =========================================
+
+if [ "$FORCE" = true ]; then
+    echo "Force option detected. Restoring files before sorting again."
+    restore_files
+fi
+
+# =========================================
+# Check If Already Sorted
+# =========================================
+
+if [ -f "$SORTED_FLAG" ]; then
     echo "This folder has already been sorted. Use --force to sort again."
     exit 1
-  fi
 fi
 
-# Create target directory if it doesn't exist (after renaming)
+# =========================================
+# Pre-Execution Checks
+# =========================================
+
+# Check write permissions
+if [ ! -w "$SOURCE_DIR" ]; then
+    echo "Error: No write permission in source directory."
+    exit 1
+fi
+
+# Check disk space (approximate)
+REQUIRED_SPACE=$(du -s "$SOURCE_DIR" | awk '{print $1}')
+AVAILABLE_SPACE=$(df "$SOURCE_DIR" | tail -1 | awk '{print $4}')
+if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+    echo "Warning: Insufficient disk space. Sorting may fail."
+    if [ "$NO_PROMPT" = false ]; then
+        if ! confirm_action "Do you want to continue?"; then
+            echo "Operation aborted by user."
+            exit 1
+        fi
+    fi
+fi
+
+# =========================================
+# Combine Supported Extensions
+# =========================================
+
+if [ "${#EXTRA_EXTENSIONS[@]}" -ne 0 ]; then
+    SUPPORTED_EXTENSIONS+=("${EXTRA_EXTENSIONS[@]}")
+fi
+
+# Build find expression for supported extensions
+FIND_EXTENSIONS=""
+for ext in "${SUPPORTED_EXTENSIONS[@]}"; do
+    FIND_EXTENSIONS+=" -iname '*.${ext}' -o"
+done
+# Remove trailing -o
+FIND_EXTENSIONS="${FIND_EXTENSIONS% -o}"
+
+# =========================================
+# Exclude Specified Directories
+# =========================================
+
+EXCLUDE_PATHS=()
+for dir in "${EXCLUDE_DIRS[@]}"; do
+    EXCLUDE_PATHS+=("-path '$SOURCE_DIR/$dir' -prune -o")
+done
+
+# Build find command
+FIND_CMD="find \"$SOURCE_DIR\""
+for exclude in "${EXCLUDE_PATHS[@]}"; do
+    FIND_CMD+=" $exclude"
+done
+FIND_CMD+=" -type f \\( $FIND_EXTENSIONS \\)"
+
+# =========================================
+# Create Target Directory
+# =========================================
+
 if [ "$DRYRUN" = true ]; then
-  echo "[DRYRUN] Would create target directory: $TARGET_DIR"
+    echo "[DRYRUN] Would create target directory: $TARGET_DIR"
 else
-  mkdir -p "$TARGET_DIR"
-  echo "Created target directory: $TARGET_DIR"
+    mkdir -p "$TARGET_DIR"
+    echo "Created target directory: $TARGET_DIR"
 fi
 
 # Initialize the log file
 if [ "$DRYRUN" = false ]; then
-  touch "$LOG_FILE"
+    > "$LOG_FILE"
 fi
 
-processed_files=()
-created_dirs=()
+# =========================================
+# Function to Move Files
+# =========================================
 
-# Load already processed files from the log
-if [ -f "$LOG_FILE" ]; then
-  while IFS= read -r file; do
-    processed_files+=("$file")
-  done < "$LOG_FILE"
-fi
-
-# Function to check if a file is already processed
-is_processed() {
-  local file="$1"
-  for processed in "${processed_files[@]}"; do
-    if [[ "$processed" == "$file" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Function to move files
 move_file() {
-  local file="$1"
-  local target_dir="$2"
+    local file="$1"
+    local target_dir="$2"
 
-  base_name=$(basename "$file")
-  target_file="$target_dir/$base_name"
+    base_name="$(basename "$file")"
+    target_file="$target_dir/$base_name"
 
-  # If --force and --dryrun are both true, skip counter logic
-  if [ "$FORCE" = true ] && [ "$DRYRUN" = true ]; then
-    echo "[DRYRUN] Would move file: $file to $target_file"
-  else
+    # Counter logic to handle existing files
     counter=1
     while [ -e "$target_file" ]; do
-      extension="${base_name##*.}"
-      filename="${base_name%.*}"
-      target_file="$target_dir/${filename}_$counter.$extension"
-      ((counter++))
+        extension="${base_name##*.}"
+        filename="${base_name%.*}"
+        target_file="$target_dir/${filename}_$counter.$extension"
+        ((counter++))
     done
 
     if [ "$DRYRUN" = true ]; then
-      echo "[DRYRUN] Would move file: $file to $target_file"
+        echo "[DRYRUN] Would move file: $file to $target_file"
     else
-      mv "$file" "$target_file"
-      echo "Moved $file to $target_file"
-      echo "$file" >> "$LOG_FILE"
+        mkdir -p "$target_dir"
+        mv "$file" "$target_file"
+        echo "Moved $file to $target_file"
+        # Log relative paths
+        rel_source="${file#$SOURCE_DIR/}"
+        rel_target="${target_file#$SOURCE_DIR/}"
+        echo "$rel_source -> $rel_target" >> "$LOG_FILE"
     fi
-  fi
 }
 
-# Function to ensure the target directory is created
+# =========================================
+# Function to Create Directories
+# =========================================
+
 create_dir() {
-  local dir="$1"
-  if [[ ! " ${created_dirs[@]} " =~ " $dir " ]]; then
-    if [ "$DRYRUN" = true ]; then
-      echo "[DRYRUN] Would create folder: $dir"
-    else
-      mkdir -p "$dir"
-      created_dirs+=("$dir")
-      echo "Created folder: $dir"
+    local dir="$1"
+    if [[ ! " ${CREATED_DIRS[@]} " =~ " $dir " ]]; then
+        if [ "$DRYRUN" = true ]; then
+            echo "[DRYRUN] Would create folder: $dir"
+        else
+            mkdir -p "$dir"
+            CREATED_DIRS+=("$dir")
+            echo "Created folder: $dir"
+        fi
     fi
-  fi
 }
 
-# Process files (JPEG, PNG, RAW formats, MOV, MP4, etc.)
+# =========================================
+# Process Files
+# =========================================
+
 process_files() {
-  find "$SOURCE_DIR" -type f \( \
-    -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.cr2" -o -iname "*.cr3" \
-    -o -iname "*.nef" -o -iname "*.arw" -o -iname "*.rw2" -o -iname "*.orf" -o -iname "*.raf" -o -iname "*.dng" \
-    -o -iname "*.mov" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.wmv" -o -iname "*.flv" \
-    -o -iname "*.mpeg" -o -iname "*.mpg" \) | while read -r file; do
+    # Evaluate find command
+    eval "$FIND_CMD" | while IFS= read -r file; do
 
-    # Skip sorted_output folder unless --force is present
-    if [[ "$FORCE" = false && "$file" =~ sorted_output ]]; then
-      continue
-    fi
+        # Skip sorted_output directory
+        if [[ "$file" =~ "$TARGET_DIR" ]]; then
+            continue
+        fi
 
-    # Check if file has been processed or --force is used
-    if ! is_processed "$file" || [ "$FORCE" = true ]; then
-      if [ -f "$file" ]; then
-        # Get the modification date if no metadata date
-        file_date=$(exiftool -d "%Y%m%d" -DateTimeOriginal -T "$file" 2>/dev/null || date -r "$file" "+%Y%m%d")
+        # Handle special characters in filenames
+        file="$(printf '%q' "$file")"
 
-        # Create target directory and move the file
-        target_dir="$TARGET_DIR/$file_date"
-        create_dir "$target_dir"
-        move_file "$file" "$target_dir"
-      fi
-    fi
-  done
-}
+        if [ -f "$file" ]; then
+            # Get metadata date
+            file_date="$(exiftool -s3 -DateTimeOriginal "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
 
-# Process XMP files
-process_xmp() {
-  find "$SOURCE_DIR" -type f -iname "*.xmp" | while read -r xmp_file; do
-    corresponding_raw=""
-    for ext in cr2 cr3 nef arw rw2 orf raf dng; do
-      if [ -f "${xmp_file%.xmp}.$ext" ]; then
-        corresponding_raw="${xmp_file%.xmp}.$ext"
-        break
-      fi
+            # Fallback to other metadata fields
+            if [ -z "$file_date" ]; then
+                file_date="$(exiftool -s3 -CreateDate "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
+            fi
+
+            if [ -z "$file_date" ]; then
+                file_date="$(exiftool -s3 -ModifyDate "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
+            fi
+
+            # Fallback to file modification date
+            if [ -z "$file_date" ]; then
+                file_date="$(date -r "$file" "+%Y%m%d")"
+            fi
+
+            # Normalize date
+            if ! [[ "$file_date" =~ ^[0-9]{8}$ ]]; then
+                file_date="UnknownDate"
+            fi
+
+            # Create target directory and move the file
+            target_dir="$TARGET_DIR/$file_date"
+            create_dir "$target_dir"
+            move_file "$file" "$target_dir"
+        fi
     done
-
-    if [ -n "$corresponding_raw" ]; then
-      raw_dir=$(dirname "$corresponding_raw")
-      create_dir "$raw_dir"
-      move_file "$xmp_file" "$raw_dir"
-    else
-      echo "Skipping $xmp_file because no corresponding RAW file found."
-    fi
-  done
 }
 
-# Function to check and remove empty folders
+# =========================================
+# Process XMP Files
+# =========================================
+
+process_xmp() {
+    find "$SOURCE_DIR" -type f -iname "*.xmp" | while IFS= read -r xmp_file; do
+        corresponding_raw=""
+        for ext in "${SUPPORTED_EXTENSIONS[@]}"; do
+            if [ -f "${xmp_file%.xmp}.$ext" ]; then
+                corresponding_raw="${xmp_file%.xmp}.$ext"
+                break
+            fi
+        done
+
+        if [ -n "$corresponding_raw" ]; then
+            raw_dir="$(dirname "$corresponding_raw")"
+            create_dir "$raw_dir"
+            move_file "$xmp_file" "$raw_dir"
+        else
+            echo "Skipping $xmp_file because no corresponding RAW file found."
+        fi
+    done
+}
+
+# =========================================
+# Remove Empty Folders
+# =========================================
+
 remove_empty_folders() {
-  local folder="$1"
-  if [ -d "$folder" ] && [ -z "$(find "$folder" -type f)" ]; then
-    if [ "$DRYRUN" = true ]; then
-      echo "[DRYRUN] Would remove empty folder: $folder"
-    else
-      rm -rf "$folder"
-      echo "Removed empty folder: $folder"
-    fi
-  fi
+    find "$SOURCE_DIR" -type d -empty | while IFS= read -r dir; do
+        if [ "$dir" != "$TARGET_DIR" ]; then
+            if [ "$DRYRUN" = true ]; then
+                echo "[DRYRUN] Would remove empty folder: $dir"
+            else
+                rmdir "$dir"
+                echo "Removed empty folder: $dir"
+            fi
+        fi
+    done
 }
 
-# Run the processes
+# =========================================
+# Run the Processes
+# =========================================
+
 process_files
 process_xmp
+remove_empty_folders
 
-# Check and remove empty force_resort_temp folder (and subfolders) if present
-remove_empty_folders "$SOURCE_DIR"
-
-# Remove the flags and log files in force_resort_temp if no files left
+# Create the sorted flag file
 if [ "$DRYRUN" = false ]; then
-  if [ -z "$(find "$FORCE_RESORT_TEMP_FOLDER" -type f)" ]; then
-    [ -f "$FORCE_RESORT_TEMP_FOLDER/.sorted_done" ] && rm -f "$FORCE_RESORT_TEMP_FOLDER/.sorted_done"
-    [ -f "$FORCE_RESORT_TEMP_FOLDER/sorted_files.log" ] && rm -f "$FORCE_RESORT_TEMP_FOLDER/sorted_files.log"
-    remove_empty_folders "$FORCE_RESORT_TEMP_FOLDER"
-    echo "Removed sorted flags and log file in $FORCE_RESORT_TEMP_FOLDER."
-  fi
+    touch "$SORTED_FLAG"
 fi
 
 echo "Sorting complete."

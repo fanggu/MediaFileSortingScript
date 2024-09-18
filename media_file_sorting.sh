@@ -1,23 +1,24 @@
 #!/bin/bash
 
 # =========================================
-#Photo and Video Sorting Script
+# Photo and Video Sorting Script
 # =========================================
 
-# Script Version: 1.0
+# Script Version: 1.2
 
 # -----------------------------------------
 # Usage:
 # ./script.sh [options] /path/to/source/photos
 #
 # Options:
-#   --dryrun           Simulate actions without making changes
-#   --force            Restore files before sorting again
-#   --restore          Restore files to original locations
-#   --help             Display help message
-#   --extensions       Specify additional file extensions to include
-#   --exclude-dirs     Exclude specified directories from processing
-#   --no-prompt        Do not prompt for confirmations
+#   --dryrun               Simulate actions without making changes
+#   --force                Restore files before sorting again
+#   --restore              Restore files to original locations
+#   --help                 Display help message
+#   --extensions ext1,ext2 Specify additional file extensions to include
+#   --exclude-dirs dir1,dir2 Exclude specified directories from processing
+#   --date-format format   Specify date format for folder names (e.g., %Y-%m-%d)
+#   --no-prompt            Do not prompt for confirmations
 # -----------------------------------------
 
 # =========================================
@@ -39,6 +40,7 @@ LOCK_FILE=""
 PROCESSED_FILES=()
 CREATED_DIRS=()
 SUPPORTED_EXTENSIONS=(jpg jpeg png cr2 cr3 nef arw rw2 orf raf dng mov mp4 avi mkv wmv flv mpeg mpg)
+DATE_FORMAT="%Y%m%d"  # Default date format
 
 # =========================================
 # Function to Display Help Message
@@ -48,13 +50,14 @@ display_help() {
     echo "Usage: $0 [options] /path/to/source/photos"
     echo
     echo "Options:"
-    echo "  --dryrun           Simulate actions without making changes"
-    echo "  --force            Restore files before sorting again"
-    echo "  --restore          Restore files to original locations"
-    echo "  --help             Display this help message"
-    echo "  --extensions ext1,ext2  Specify additional file extensions to include"
-    echo "  --exclude-dirs dir1,dir2  Exclude specified directories from processing"
-    echo "  --no-prompt        Do not prompt for confirmations"
+    echo "  --dryrun               Simulate actions without making changes"
+    echo "  --force                Restore files before sorting again"
+    echo "  --restore              Restore files to original locations"
+    echo "  --help                 Display this help message"
+    echo "  --extensions ext1,ext2 Specify additional file extensions to include"
+    echo "  --exclude-dirs dir1,dir2 Exclude specified directories from processing"
+    echo "  --date-format format   Specify date format for folder names (e.g., '%Y-%m-%d')"
+    echo "  --no-prompt            Do not prompt for confirmations"
     exit 0
 }
 
@@ -87,6 +90,10 @@ while [[ "$1" =~ ^- ]]; do
             shift
             IFS=',' read -ra EXCLUDE_DIRS <<< "$1"
             ;;
+        --date-format)
+            shift
+            DATE_FORMAT="$1"
+            ;;
         *)
             echo "Unknown option: $1"
             display_help
@@ -113,6 +120,30 @@ fi
 
 # Convert SOURCE_DIR to absolute path
 SOURCE_DIR="$(cd "$SOURCE_DIR"; pwd)"
+
+# =========================================
+# Validate Date Format
+# =========================================
+
+validate_date_format() {
+    # Test date: January 1, 2000 at 00:00:00
+    TEST_DATE="2000:01:01 00:00:00"
+
+    # Attempt to format the test date using exiftool
+    FORMATTED_DATE="$(exiftool -d "$DATE_FORMAT" -DateTimeOriginal -j - < /dev/null 2>/dev/null | grep -o '"DateTimeOriginal":.*' | cut -d'"' -f4)"
+
+    # If exiftool failed, try using the date command
+    if [ -z "$FORMATTED_DATE" ]; then
+        FORMATTED_DATE="$(date -j -f "%Y:%m:%d %H:%M:%S" "$TEST_DATE" +"$DATE_FORMAT" 2>/dev/null)"
+    fi
+
+    if [ -z "$FORMATTED_DATE" ]; then
+        echo "Error: Invalid date format '$DATE_FORMAT'. Please provide a valid format."
+        exit 1
+    fi
+}
+
+validate_date_format
 
 # =========================================
 # Set Target Directory and Paths
@@ -407,25 +438,25 @@ process_files() {
         file="$(printf '%q' "$file")"
 
         if [ -f "$file" ]; then
-            # Get metadata date
-            file_date="$(exiftool -s3 -DateTimeOriginal "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
+            # Get metadata date using user-specified format
+            file_date="$(exiftool -s3 -d "$DATE_FORMAT" -DateTimeOriginal "$file" 2>/dev/null)"
 
             # Fallback to other metadata fields
             if [ -z "$file_date" ]; then
-                file_date="$(exiftool -s3 -CreateDate "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
+                file_date="$(exiftool -s3 -d "$DATE_FORMAT" -CreateDate "$file" 2>/dev/null)"
             fi
 
             if [ -z "$file_date" ]; then
-                file_date="$(exiftool -s3 -ModifyDate "$file" 2>/dev/null | awk -F'[: ]' '{print $1$2$3}')"
+                file_date="$(exiftool -s3 -d "$DATE_FORMAT" -ModifyDate "$file" 2>/dev/null)"
             fi
 
             # Fallback to file modification date
             if [ -z "$file_date" ]; then
-                file_date="$(date -r "$file" "+%Y%m%d")"
+                file_date="$(date -r "$file" +"$DATE_FORMAT" 2>/dev/null)"
             fi
 
-            # Normalize date
-            if ! [[ "$file_date" =~ ^[0-9]{8}$ ]]; then
+            # If file_date is still empty, set to UnknownDate
+            if [ -z "$file_date" ]; then
                 file_date="UnknownDate"
             fi
 

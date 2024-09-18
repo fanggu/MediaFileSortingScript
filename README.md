@@ -2,18 +2,95 @@
 
 ## Overview
 
-This Bash script automatically organizes photos and videos by their shooting date (from EXIF data) or file creation date (if EXIF data is not available). It sorts files into directories based on the year, month, and optionally the day the media was captured. The script is useful for managing large collections of media files from various devices and platforms.
+This Bash script automates the sorting of photos and videos into folders based on their shooting date (from EXIF metadata) or file modification date if no EXIF data is available. It offers options for dry runs, restoring files, and excluding directories. The script supports a wide range of image and video file formats and includes the ability to handle additional extensions.
 
 ## Features
 
-- **EXIF Metadata Sorting**: Prioritizes sorting based on the shooting date from EXIF data for supported file types.
-- **Fallback to File Creation Date**: Uses the file's creation or modification date if no EXIF data is available.
-- **Directory Structure**: Files are sorted into subdirectories by year, month, and day.
-- **Supported File Types**: Handles common image and video formats, including JPEG, PNG, RAW (e.g., CR2, NEF), MOV, MP4, and more.
-- **Logging**: The script logs processed files for future reference.
-- **Dry Run Option**: Allows users to simulate the sorting process without making actual changes.
+- **EXIF Metadata Sorting**: Sorts files based on their shooting date stored in EXIF metadata.
+- **Fallback to File Modification Date**: Uses the file's modification date if no EXIF data is available.
+- **Customizable File Extensions**: You can specify additional file extensions for sorting.
+- **Dry Run Option**: Preview sorting operations without making any changes.
+- **Force Restore**: Restores previously sorted files to their original locations.
+- **Directory Exclusion**: Optionally exclude directories from being processed.
+- **Support for Various Media Formats**: Works with popular photo and video formats (e.g., JPEG, PNG, RAW, MOV, MP4).
 
 ## Usage
 
 ```bash
-./sort_media.sh [-dryrun|--dryrun] [-force|--force] /path/to/source/directory
+./script.sh [options] /path/to/source/photos
+```
+
+### Options
+
+- `--dryrun` - Simulate the sorting process without making changes.
+- `--force` - Force resorting of files that have already been sorted.
+- `--restore` - Restore files to their original locations.
+- `--extensions ext1,ext2` - Specify additional file extensions to include in the sorting process.
+- `--exclude-dirs dir1,dir2` - Exclude specific directories from being processed.
+- `--no-prompt` - Do not prompt for confirmations.
+
+### Example
+
+```bash
+./script.sh --dryrun --exclude-dirs "backup,temp" /path/to/source/photos
+```
+
+This example simulates sorting photos while excluding `backup` and `temp` directories.
+
+### File Restoration
+
+To restore previously sorted files:
+
+```bash
+./script.sh --restore /path/to/source/photos
+```
+
+This restores all files based on the log file and deletes the sorted directory, flag, and log file.
+
+## Supported File Formats
+
+The script supports the following file types by default:
+
+- **Image Formats**: JPG, JPEG, PNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, DNG.
+- **Video Formats**: MOV, MP4, AVI, MKV, WMV, FLV, MPEG, MPG.
+
+You can extend this list using the `--extensions` option.
+
+## Requirements
+
+- **bash** (standard shell environment)
+- **exiftool** (required to read EXIF metadata)
+
+### Installing `exiftool`
+
+On Linux (Debian-based systems):
+
+```bash
+sudo apt-get install exiftool
+```
+
+On macOS (using Homebrew):
+
+```bash
+brew install exiftool
+```
+
+## Directory Structure
+
+The script organizes files into the following folder structure:
+
+```
+/sorted_output/
+  ├── 20240909
+  │   └── IMG_1234.JPG
+  │   └── VIDEO_5678.MP4
+  └── ... (more files)
+```
+
+## Logging
+
+The script logs all processed files to `sorted_files.log`. You can use this log to restore files to their original locations if necessary.
+
+## License
+
+This project is licensed under the GPL-3.0 license - see the [LICENSE](LICENSE) file for details.
